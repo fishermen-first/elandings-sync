@@ -1,0 +1,21 @@
+# Environment & credentials
+.env
+.env.local
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Data (don't commit synced reports)
+data/
+*.xml
+landing_report_*.xml
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db

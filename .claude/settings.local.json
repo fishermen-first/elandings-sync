@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command \"cd 'C:\\Users\\vikra\\Projects\\eLandings-sync'; .\\.venv\\Scripts\\python.exe src/client/elandings_client.py\":*)",
+      "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync\\src\\client''; ..\\..\\..\\.venv\\Scripts\\python.exe sync_landing_reports.py --full --output ../../data/landing_reports\")",
+      "Bash(powershell -Command \"cd 'C:\\Users\\vikra\\Projects\\eLandings-sync'; .\\.venv\\Scripts\\python.exe src/client/sync_landing_reports.py --full --output data/landing_reports\":*)",
+      "Bash(powershell -Command \"Get-ChildItem ''C:\\Users\\vikra\\Projects\\eLandings-sync\\data\\landing_reports'' -Filter ''*.json'' | Measure-Object | Select-Object -ExpandProperty Count\")",
+      "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync''; git status 2>&1\")",
+      "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync''; git init\")",
+      "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync''; .\\.venv\\Scripts\\pip.exe install streamlit pandas --quiet\")",
+      "Bash(powershell:*)"
+    ]
+  }
+}
