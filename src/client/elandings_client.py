@@ -14,7 +14,10 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 # Configuration
-ENDPOINT = "https://elandingst.alaska.gov/elandings/ReportManagementService"
+ENDPOINT = os.environ.get(
+    "ELANDINGS_ENDPOINT",
+    "https://elandingst.alaska.gov/elandings/ReportManagementService"
+)
 TARGET_NS = "http://webservices.er.psmfc.org/"
 USER = os.getenv("ELANDINGS_USER")
 PWD = os.getenv("ELANDINGS_PASSWORD")
