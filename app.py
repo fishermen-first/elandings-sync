@@ -19,6 +19,13 @@ sys.path.insert(0, str(Path(__file__).parent / "src" / "client"))
 from elandings_client import ELandingsClient, pretty_print_xml
 from sync_landing_reports import LandingReportSync, parse_landing_report
 
+# Try to import Supabase storage (optional dependency)
+try:
+    from supabase_storage import SupabaseStorage
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+
 st.set_page_config(
     page_title="eLandings Sync",
     page_icon="",
@@ -85,6 +92,36 @@ def get_credentials():
     }
 
 
+def get_supabase_storage():
+    """Get Supabase storage instance if configured, else None."""
+    if not SUPABASE_AVAILABLE:
+        return None
+
+    # Try Streamlit secrets first
+    try:
+        if hasattr(st, "secrets") and "SUPABASE_URL" in st.secrets:
+            return SupabaseStorage(
+                url=st.secrets["SUPABASE_URL"],
+                key=st.secrets["SUPABASE_KEY"],
+            )
+    except Exception:
+        pass
+
+    # Fall back to environment variables
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    if url and key:
+        return SupabaseStorage(url=url, key=key)
+
+    return None
+
+
+@st.cache_resource
+def get_cached_supabase_storage():
+    """Get cached Supabase storage instance."""
+    return get_supabase_storage()
+
+
 def extract_value(obj, default=""):
     """Extract text value from dict or return string directly."""
     if isinstance(obj, dict):
@@ -136,6 +173,7 @@ with st.sidebar:
     st.header("Configuration")
 
     creds = get_credentials()
+    supabase = get_cached_supabase_storage()
 
     if not creds["user"]:
         st.warning("No credentials found. Using demo mode with sample data.")
@@ -143,6 +181,12 @@ with st.sidebar:
     else:
         st.success(f"Connected as: **{creds['user']}**")
         demo_mode = False
+
+    # Show storage status
+    if supabase:
+        st.success("Storage: **Supabase**")
+    else:
+        st.info("Storage: **Local files**")
 
     st.divider()
 
@@ -162,8 +206,8 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["Landing Reports", "Sync Data", "Report Details", "Data Dictionary"])
 
 @st.cache_data
-def build_report_index(data_dir: str) -> pd.DataFrame:
-    """Build a lightweight index of all reports for fast filtering."""
+def build_report_index_from_files(data_dir: str) -> pd.DataFrame:
+    """Build a lightweight index of all reports from local files."""
     data_path = Path(data_dir)
     index_data = []
 
@@ -207,6 +251,53 @@ def build_report_index(data_dir: str) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=60)
+def build_report_index_from_supabase(_supabase) -> pd.DataFrame:
+    """Build report index from Supabase."""
+    reports = _supabase.get_all_reports()
+    if not reports:
+        return pd.DataFrame()
+
+    # Need to get species from line items for each report
+    index_data = []
+    for r in reports:
+        # Get species for this report from line items table
+        try:
+            items_result = _supabase.client.table("landing_report_items").select(
+                "species_name"
+            ).eq("landing_report_id", r["id"]).execute()
+            species_list = list(set(
+                item["species_name"] for item in (items_result.data or [])
+                if item.get("species_name")
+            ))
+        except Exception:
+            species_list = []
+
+        index_data.append({
+            "Report ID": str(r.get("id", "")),
+            "Vessel": r.get("vessel_name", ""),
+            "ADF&G Vessel #": r.get("vessel_adfg_number", ""),
+            "Species": ", ".join(species_list),
+            "Landing Date": str(r.get("date_of_landing", ""))[:10] if r.get("date_of_landing") else "",
+            "Last Modified": str(r.get("last_change_date", ""))[:10] if r.get("last_change_date") else "",
+            "Port": r.get("port_name", ""),
+            "Type": r.get("report_type_name", ""),
+            "Status": r.get("status_desc", ""),
+        })
+
+    df = pd.DataFrame(index_data)
+    if not df.empty and "Landing Date" in df.columns:
+        df = df.sort_values("Landing Date", ascending=False)
+    return df
+
+
+def build_report_index(data_dir: str, supabase=None) -> pd.DataFrame:
+    """Build report index from Supabase if available, else from files."""
+    if supabase:
+        return build_report_index_from_supabase(supabase)
+    return build_report_index_from_files(data_dir)
+
+
 def load_full_reports(file_paths: list[str]) -> pd.DataFrame:
     """Load full report data for display."""
     reports = []
@@ -223,81 +314,76 @@ def load_full_reports(file_paths: list[str]) -> pd.DataFrame:
 with tab1:
     st.header("Landing Reports")
 
-    # Check for local data
     data_dir = Path("data/landing_reports")
 
-    if data_dir.exists():
-        json_files = list(data_dir.glob("landing_report_*.json"))
+    # Build index from Supabase or local files
+    with st.spinner("Loading reports..."):
+        index_df = build_report_index(str(data_dir), supabase)
 
-        if json_files:
-            # Build cached index of all reports (with spinner on first load)
-            with st.spinner("Building report index..."):
-                index_df = build_report_index(str(data_dir))
+    if not index_df.empty:
+        storage_type = "Supabase" if supabase else "local storage"
+        st.info(f"Found **{len(index_df)}** landing reports in {storage_type}")
 
-            if not index_df.empty:
-                st.info(f"Found **{len(index_df)}** landing reports in local storage")
+        # Filters - use index for filter options (all reports)
+        col1, col2 = st.columns(2)
+        with col1:
+            all_vessels = sorted(index_df["Vessel"].dropna().unique())
+            vessel_filter = st.multiselect(
+                "Filter by Vessel",
+                options=all_vessels,
+            )
+        with col2:
+            species_filter = st.text_input("Filter by Species (contains)")
 
-                # Filters - use index for filter options (all reports)
-                col1, col2 = st.columns(2)
-                with col1:
-                    all_vessels = sorted(index_df["Vessel"].dropna().unique())
-                    vessel_filter = st.multiselect(
-                        "Filter by Vessel",
-                        options=all_vessels,
-                    )
-                with col2:
-                    species_filter = st.text_input("Filter by Species (contains)")
+        # Apply filters to index
+        filtered_index = index_df.copy()
+        if vessel_filter:
+            filtered_index = filtered_index[filtered_index["Vessel"].isin(vessel_filter)]
+        if species_filter:
+            filtered_index = filtered_index[
+                filtered_index["Species"].str.contains(species_filter, case=False, na=False)
+            ]
 
-                # Apply filters to index
-                filtered_index = index_df.copy()
-                if vessel_filter:
-                    filtered_index = filtered_index[filtered_index["Vessel"].isin(vessel_filter)]
-                if species_filter:
-                    filtered_index = filtered_index[
-                        filtered_index["Species"].str.contains(species_filter, case=False, na=False)
-                    ]
-
-                # Determine which reports to load
-                has_filter = bool(vessel_filter or species_filter)
-                if has_filter:
-                    # Show all matching reports when filtered
-                    files_to_load = filtered_index["file"].tolist()
-                    showing_msg = f"Showing all **{len(files_to_load)}** matching reports"
-                else:
-                    # Show top 100 most recent when no filter
-                    files_to_load = filtered_index.head(100)["file"].tolist()
-                    if len(filtered_index) > 100:
-                        showing_msg = f"Showing **100** most recent reports (use filters to see all **{len(filtered_index)}**)"
-                    else:
-                        showing_msg = f"Showing all **{len(files_to_load)}** reports"
-
-                st.caption(showing_msg)
-
-                # Load full data only for displayed reports
-                if files_to_load:
-                    df = load_full_reports(files_to_load)
-
-                    st.dataframe(
-                        df,
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                    # Summary stats
-                    st.subheader("Summary")
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Total Reports", len(df))
-                    col2.metric("Unique Vessels", df["Vessel"].nunique())
-                    col3.metric("Unique Ports", df["Port"].nunique())
-                    col4.metric("Report Types", df["Type"].nunique())
-                else:
-                    st.warning("No reports match your filters.")
-            else:
-                st.warning("No landing reports found. Use the **Sync Data** tab to pull reports.")
+        # Determine display limit
+        has_filter = bool(vessel_filter or species_filter)
+        if has_filter:
+            display_df = filtered_index
+            showing_msg = f"Showing all **{len(display_df)}** matching reports"
         else:
-            st.warning("No landing reports found. Use the **Sync Data** tab to pull reports.")
+            display_df = filtered_index.head(100)
+            if len(filtered_index) > 100:
+                showing_msg = f"Showing **100** most recent reports (use filters to see all **{len(filtered_index)}**)"
+            else:
+                showing_msg = f"Showing all **{len(display_df)}** reports"
+
+        st.caption(showing_msg)
+
+        if not display_df.empty:
+            if supabase:
+                # For Supabase, index already has all display columns
+                df = display_df[["Report ID", "Status", "Type", "Vessel", "ADF&G Vessel #", "Port", "Landing Date", "Species", "Last Modified"]].copy()
+            else:
+                # For local files, load full reports
+                files_to_load = display_df["file"].tolist()
+                df = load_full_reports(files_to_load)
+
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Summary stats
+            st.subheader("Summary")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Reports", len(df))
+            col2.metric("Unique Vessels", df["Vessel"].nunique())
+            col3.metric("Unique Ports", df["Port"].nunique() if "Port" in df.columns else "N/A")
+            col4.metric("Report Types", df["Type"].nunique() if "Type" in df.columns else "N/A")
+        else:
+            st.warning("No reports match your filters.")
     else:
-        st.warning("No data directory found. Use the **Sync Data** tab to pull reports.")
+        st.warning("No landing reports found. Use the **Sync Data** tab to pull reports.")
 
 with tab2:
     st.header("Sync Landing Reports")
@@ -305,11 +391,12 @@ with tab2:
     if demo_mode:
         st.error("Cannot sync without valid credentials. Set ELANDINGS_USER and ELANDINGS_PASSWORD.")
     else:
-        st.markdown("""
+        storage_dest = "Supabase" if supabase else "local JSON files"
+        st.markdown(f"""
         Pull landing reports from eLandings. The sync will:
         1. Search for reports matching your filters
         2. Download full details for each report
-        3. Save to local JSON files
+        3. Save to **{storage_dest}**
         """)
 
         col1, col2 = st.columns(2)
@@ -326,7 +413,10 @@ with tab2:
 
         if st.button("Start Sync", type="primary"):
             try:
-                sync = LandingReportSync(output_dir="data/landing_reports")
+                sync = LandingReportSync(
+                    output_dir="data/landing_reports",
+                    supabase_storage=supabase,
+                )
 
                 if full_refresh:
                     since = None
@@ -379,86 +469,96 @@ with tab3:
     st.header("Report Details")
 
     data_dir = Path("data/landing_reports")
-    if data_dir.exists():
+
+    # Get report IDs from Supabase or local files
+    report_ids = []
+    if supabase:
+        existing_ids = supabase.get_existing_report_ids()
+        report_ids = sorted(existing_ids, reverse=True)
+    elif data_dir.exists():
         json_files = list(data_dir.glob("landing_report_*.json"))
+        for f in json_files:
+            report_id = f.stem.replace("landing_report_", "")
+            report_ids.append(report_id)
+        report_ids = sorted(report_ids, reverse=True)
 
-        if json_files:
-            # Extract report IDs for dropdown
-            report_ids = []
-            for f in json_files:
-                report_id = f.stem.replace("landing_report_", "")
-                report_ids.append(report_id)
+    if report_ids:
+        # Combobox: type to filter/enter or select from dropdown
+        selected_id = st.selectbox(
+            "Select or enter Report ID",
+            options=report_ids,
+            index=None,
+            placeholder="Type or select a report ID...",
+        )
 
-            # Combobox: type to filter/enter or select from dropdown
-            selected_id = st.selectbox(
-                "Select or enter Report ID",
-                options=sorted(report_ids, reverse=True),
-                index=None,
-                placeholder="Type or select a report ID...",
-            )
-
-            if selected_id:
+        if selected_id:
+            # Load report from Supabase or local file
+            report = None
+            if supabase:
+                report = supabase.get_report(int(selected_id))
+            else:
                 report_file = data_dir / f"landing_report_{selected_id}.json"
                 if report_file.exists():
                     with open(report_file, encoding="utf-8", errors="replace") as f:
                         report = json.load(f)
 
-                    # Display key info
-                    col1, col2, col3 = st.columns(3)
+            if report:
+                # Display key info
+                col1, col2, col3 = st.columns(3)
 
-                    header = report.get("header", {})
+                header = report.get("header", {})
 
-                    with col1:
-                        st.markdown("### Header")
-                        vessel_obj = header.get('vessel', {})
-                        vessel_name = extract_value(vessel_obj.get('@name')) if isinstance(vessel_obj, dict) else ""
-                        vessel_num = vessel_obj.get('#text', '') if isinstance(vessel_obj, dict) else ""
-                        st.write(f"**Vessel:** {vessel_name}")
-                        st.write(f"**ADF&G Vessel #:** {vessel_num}")
-                        st.write(f"**Port:** {extract_value(header.get('port_of_landing', {}).get('@name'))}")
-                        st.write(f"**Landing Date:** {extract_value(header.get('date_of_landing'))}")
-                        st.write(f"**Gear:** {extract_value(header.get('gear', {}).get('@name'))}")
+                with col1:
+                    st.markdown("### Header")
+                    vessel_obj = header.get('vessel', {})
+                    vessel_name = extract_value(vessel_obj.get('@name')) if isinstance(vessel_obj, dict) else ""
+                    vessel_num = vessel_obj.get('#text', '') if isinstance(vessel_obj, dict) else ""
+                    st.write(f"**Vessel:** {vessel_name}")
+                    st.write(f"**ADF&G Vessel #:** {vessel_num}")
+                    st.write(f"**Port:** {extract_value(header.get('port_of_landing', {}).get('@name'))}")
+                    st.write(f"**Landing Date:** {extract_value(header.get('date_of_landing'))}")
+                    st.write(f"**Gear:** {extract_value(header.get('gear', {}).get('@name'))}")
 
-                    with col2:
-                        st.markdown("### Processor")
-                        proc_code = header.get("proc_code_owner", {}).get("proc_code", {})
-                        st.write(f"**Proc Code:** {extract_value(proc_code)}")
-                        st.write(f"**Processor:** {extract_value(proc_code.get('@processor') if isinstance(proc_code, dict) else '')}")
-                        st.write(f"**Fed Processor #:** {extract_value(header.get('federal_processor_number'))}")
+                with col2:
+                    st.markdown("### Processor")
+                    proc_code = header.get("proc_code_owner", {}).get("proc_code", {})
+                    st.write(f"**Proc Code:** {extract_value(proc_code)}")
+                    st.write(f"**Processor:** {extract_value(proc_code.get('@processor') if isinstance(proc_code, dict) else '')}")
+                    st.write(f"**Fed Processor #:** {extract_value(header.get('federal_processor_number'))}")
 
-                    with col3:
-                        st.markdown("### Status")
-                        st.write(f"**Status:** {extract_value(report.get('status', {}).get('@desc'))}")
-                        st.write(f"**Type:** {extract_value(report.get('type_of_landing_report', {}).get('@name'))}")
-                        st.write(f"**Last Modified:** {report.get('@last_change_date', '')[:19]}")
+                with col3:
+                    st.markdown("### Status")
+                    st.write(f"**Status:** {extract_value(report.get('status', {}).get('@desc'))}")
+                    st.write(f"**Type:** {extract_value(report.get('type_of_landing_report', {}).get('@name'))}")
+                    st.write(f"**Last Modified:** {report.get('@last_change_date', '')[:19]}")
 
-                    # Line items
-                    st.markdown("### Catch (Line Items)")
-                    line_items = report.get("line_item", [])
-                    if isinstance(line_items, dict):
-                        line_items = [line_items]
+                # Line items
+                st.markdown("### Catch (Line Items)")
+                line_items = report.get("line_item", [])
+                if isinstance(line_items, dict):
+                    line_items = [line_items]
 
-                    if line_items:
-                        items_df = pd.DataFrame([
-                            {
-                                "Item #": item.get("item_number", ""),
-                                "Fish Ticket": extract_value(item.get("fish_ticket_number")),
-                                "Species": extract_value(item.get("species", {}).get("@name")),
-                                "Condition": extract_value(item.get("condition_code", {}).get("@name")),
-                                "Weight": extract_value(item.get("weight")),
-                                "Disposition": extract_value(item.get("disposition_code", {}).get("@name")),
-                            }
-                            for item in line_items
-                        ])
-                        st.dataframe(items_df, use_container_width=True, hide_index=True)
+                if line_items:
+                    items_df = pd.DataFrame([
+                        {
+                            "Item #": item.get("item_number", ""),
+                            "Fish Ticket": extract_value(item.get("fish_ticket_number")),
+                            "Species": extract_value(item.get("species", {}).get("@name")),
+                            "Condition": extract_value(item.get("condition_code", {}).get("@name")),
+                            "Weight": extract_value(item.get("weight")),
+                            "Disposition": extract_value(item.get("disposition_code", {}).get("@name")),
+                        }
+                        for item in line_items
+                    ])
+                    st.dataframe(items_df, use_container_width=True, hide_index=True)
 
-                    # Raw JSON
-                    with st.expander("View Raw JSON"):
-                        st.json(report)
-        else:
-            st.info("No reports available. Sync data first.")
+                # Raw JSON
+                with st.expander("View Raw JSON"):
+                    st.json(report)
+            else:
+                st.error(f"Report {selected_id} not found.")
     else:
-        st.info("No data directory. Sync data first.")
+        st.info("No reports available. Sync data first.")
 
 with tab4:
     st.header("Data Dictionary")

@@ -12,7 +12,12 @@
       "Bash(python:*)",
       "Bash(.venv/Scripts/python:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pip:*)"
     ]
   }
 }

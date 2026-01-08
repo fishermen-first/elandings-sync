@@ -1,7 +1,7 @@
 """
 eLandings Landing Report Sync
 
-Pulls landing reports from eLandings and saves them locally.
+Pulls landing reports from eLandings and saves them locally or to Supabase.
 Supports incremental sync based on last modified date.
 """
 
@@ -10,7 +10,7 @@ import os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from elandings_client import ELandingsClient
 
@@ -69,39 +69,61 @@ def parse_landing_report(xml_str: str) -> dict[str, Any]:
 
 
 class LandingReportSync:
-    """Syncs landing reports from eLandings to local storage."""
+    """Syncs landing reports from eLandings to local storage or Supabase."""
 
-    def __init__(self, output_dir: str = "data/landing_reports"):
+    def __init__(self, output_dir: str = "data/landing_reports", supabase_storage=None):
+        """Initialize sync client.
+
+        Args:
+            output_dir: Directory for local file storage (used when supabase_storage is None)
+            supabase_storage: Optional SupabaseStorage instance for cloud storage
+        """
         self.client = ELandingsClient()
+        self.supabase = supabase_storage
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.output_dir / ".sync_state.json"
 
     def _load_state(self) -> dict[str, Any]:
-        """Load sync state from file."""
+        """Load sync state from file or Supabase."""
+        if self.supabase:
+            return self.supabase.get_sync_state()
         if self.state_file.exists():
             with open(self.state_file, encoding="utf-8") as f:
                 return json.load(f)
         return {"last_sync": None, "synced_reports": []}
 
     def _save_state(self, state: dict[str, Any]) -> None:
-        """Save sync state to file."""
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, default=str, ensure_ascii=False)
+        """Save sync state to file or Supabase."""
+        if self.supabase:
+            self.supabase.save_sync_state(state.get("last_sync", ""))
+        else:
+            with open(self.state_file, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, default=str, ensure_ascii=False)
 
-    def _save_report(self, report: dict[str, Any]) -> Path:
-        """Save a landing report to JSON file."""
+    def _save_report(self, report: dict[str, Any]) -> Optional[Path]:
+        """Save a landing report to JSON file or Supabase.
+
+        Returns:
+            Path to saved file (for local storage) or None (for Supabase)
+        """
         report_id = report.get("landing_report_id", "unknown")
         if isinstance(report_id, dict):
             report_id = report_id.get("#text", "unknown")
 
-        filename = self.output_dir / f"landing_report_{report_id}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, default=str, ensure_ascii=False)
-        return filename
+        if self.supabase:
+            self.supabase.save_report(report)
+            return None
+        else:
+            filename = self.output_dir / f"landing_report_{report_id}.json"
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, default=str, ensure_ascii=False)
+            return filename
 
     def _get_existing_report_ids(self) -> set[str]:
-        """Get set of report IDs already saved locally."""
+        """Get set of report IDs already saved (locally or in Supabase)."""
+        if self.supabase:
+            return self.supabase.get_existing_report_ids()
         existing = set()
         for f in self.output_dir.glob("landing_report_*.json"):
             report_id = f.stem.replace("landing_report_", "")

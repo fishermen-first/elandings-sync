@@ -3,3 +3,4 @@ python-dotenv
 lxml
 streamlit
 pandas
+supabase
