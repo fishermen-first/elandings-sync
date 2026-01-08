@@ -249,39 +249,19 @@ if __name__ == "__main__":
     client = ELandingsClient()
 
     print("=" * 60)
-    print("Searching for Landing Reports")
+    print("Fetching Full Landing Report")
     print("=" * 60)
 
-    # Find reports from 2024
-    reports_xml = client.find_user_landing_reports(
-        date_landed_start="2024-01-01T00:00:00",
-        date_landed_end="2024-12-31T23:59:59"
-    )
-    
-    if reports_xml:
-        formatted = pretty_print_xml(reports_xml)
-        print(formatted[:5000])  # Print first 5000 chars
-        
-        # Save full response
-        with open("landing_reports_search.xml", "w") as f:
+    # Get a full landing report - using report ID 304327 from the test data
+    print("\n--- getLandingReport (304327) ---")
+    landing_report = client.get_landing_report("304327")
+    if landing_report:
+        formatted = pretty_print_xml(landing_report)
+        print(formatted)
+
+        # Save to file for analysis
+        with open("landing_report_304327.xml", "w", encoding="utf-8") as f:
             f.write(formatted)
-        print("\n[Saved full response to landing_reports_search.xml]")
-        
-        # Now get one full report
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(reports_xml)
-        
-        # Find first report ID
-        for elem in root.iter():
-            if 'landing_report_id' in elem.tag or elem.tag == 'landing_report_id':
-                report_id = elem.text
-                if report_id:
-                    print(f"\n\nFetching full report: {report_id}")
-                    full_report = client.get_landing_report(report_id)
-                    if full_report:
-                        with open(f"landing_report_{report_id}.xml", "w") as f:
-                            f.write(pretty_print_xml(full_report))
-                        print(f"[Saved to landing_report_{report_id}.xml]")
-                    break
+        print("\n[Saved to landing_report_304327.xml]")
     else:
-        print("No reports found")
+        print("No report returned")
