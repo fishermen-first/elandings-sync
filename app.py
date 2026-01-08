@@ -192,8 +192,7 @@ with st.sidebar:
 
     st.markdown("""
     ### About
-    This prototype pulls landing reports directly from the eLandings SOAP API,
-    eliminating manual data entry from fish tickets.
+    This prototype pulls landing reports directly from the eLandings SOAP API.
     """)
 
     st.divider()
