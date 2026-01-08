@@ -8,7 +8,11 @@
       "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync''; git status 2>&1\")",
       "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync''; git init\")",
       "Bash(powershell -Command \"cd ''C:\\Users\\vikra\\Projects\\eLandings-sync''; .\\.venv\\Scripts\\pip.exe install streamlit pandas --quiet\")",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(python:*)",
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
